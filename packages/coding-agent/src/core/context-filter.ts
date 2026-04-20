@@ -73,7 +73,7 @@ export interface TokenCountOptions {
 
 // ─── CWL limit ────────────────────────────────────────────────────────────────
 
-export const DEFAULT_CWL_THRESHOLD_TOKENS = 150_000;
+export const DEFAULT_CWL_THRESHOLD_TOKENS = 80_000;
 
 export type CwlLimit =
 	| { type: "percent"; value: number } // e.g. 50  → keep ≤ 50% of context window
@@ -405,7 +405,7 @@ function mapRangeByAnchors(
 /**
  * Evict messages from old, completed chunks until context utilization is within limit.
  *
- * @param limit  Optional CWL limit. Defaults to 150,000 tokens.
+ * @param limit  Optional CWL limit. Defaults to 80,000 tokens.
  *
  * Returns a view of the messages — the original array is never mutated.
  */

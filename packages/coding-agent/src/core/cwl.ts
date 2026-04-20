@@ -35,7 +35,7 @@ export interface ProcessContextResult {
  *
  * @param messages  Current agent message list (from transformContext).
  * @param contextWindowSize  Model context window token count (0 = skip eviction).
- * @param limit  Optional CWL limit (percent or raw token count). Defaults to 150,000 tokens.
+ * @param limit  Optional CWL limit (percent or raw token count). Defaults to 80,000 tokens.
  * @returns Filtered message list ready for the LLM.
  */
 export function processContextWithStats(
