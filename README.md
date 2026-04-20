@@ -6,7 +6,7 @@ It is a fork of the open-source [pi.dev](https://pi.dev/) terminal coding agent,
 
 > **Beyond Compaction: Structured Context Eviction for Long-Horizon Agents**  
 > Andrew Semenov, Svyatoslav Dorofeev — Kiz8  
-> _arXiv preprint, 2025_
+> _arXiv preprint, 2026_
 
 ---
 
@@ -103,7 +103,7 @@ packages/
 @article{semenov2025cwl,
   title   = {Beyond Compaction: Structured Context Eviction for Long-Horizon Agents},
   author  = {Semenov, Andrew and Dorofeev, Svyatoslav},
-  year    = {2025},
+  year    = {2026},
   note    = {arXiv preprint}
 }
 ```
