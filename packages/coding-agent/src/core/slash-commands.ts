@@ -37,6 +37,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "execute-plan", description: "Start a fresh session and implement the last generated plan" },
 	{ name: "loop", description: "Run a prompt or slash command on a reccuring interval" },
 	{ name: "cwl", description: "Set CWL eviction threshold: /cwl 50% | /cwl 50k | /cwl 150k | /cwl reset" },
+	{ name: "cwl-toggle", description: "Toggle CWL cleanup, tracing, delimiter tool, and prompt instructions on/off" },
 	{
 		name: "cwl-mode",
 		description: "Toggle CWL token accounting mode between fast heuristic and exact provider counts",

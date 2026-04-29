@@ -8,6 +8,7 @@ export type CwlTokenMeasurementMode = "exact" | "fast";
 
 export interface PersistentGlobalConfig {
 	debugModeEnabled?: boolean;
+	cwlEnabled?: boolean;
 	cwlLimit?: CwlLimit | null;
 	cwlTokenMeasurementMode?: CwlTokenMeasurementMode;
 }
@@ -33,6 +34,7 @@ function sanitizePersistentGlobalConfig(value: unknown): PersistentGlobalConfig 
 
 	const candidate = value as {
 		debugModeEnabled?: unknown;
+		cwlEnabled?: unknown;
 		cwlLimit?: unknown;
 		cwlTokenMeasurementMode?: unknown;
 	};
@@ -40,6 +42,10 @@ function sanitizePersistentGlobalConfig(value: unknown): PersistentGlobalConfig 
 
 	if (typeof candidate.debugModeEnabled === "boolean") {
 		config.debugModeEnabled = candidate.debugModeEnabled;
+	}
+
+	if (typeof candidate.cwlEnabled === "boolean") {
+		config.cwlEnabled = candidate.cwlEnabled;
 	}
 
 	if (candidate.cwlLimit === null) {

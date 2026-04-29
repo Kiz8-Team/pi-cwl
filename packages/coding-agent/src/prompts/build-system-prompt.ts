@@ -59,18 +59,16 @@ function appendProjectContext(
 	return result;
 }
 
-function appendSubagentContext(prompt: string, subagents: PromptSubagentInfo[]): string {
+function appendSubagentContext(prompt: string, subagents: PromptSubagentInfo[], hasDelimiter: boolean): string {
 	if (subagents.length === 0) {
 		return prompt;
 	}
 
 	const lines = subagents.map((subagent) => `- ${subagent.name}: ${subagent.description}`);
-	return (
-		prompt +
-		"\n\n# Available Subagents\n\n" +
-		"You may call subagents when useful for the current request. Main-agent chunking rules apply only to the main agent: do not start, end, or manage delimiter chunks just for a subagent call, and subagents may be invoked whether the main agent is currently outside a chunk, inside an exploration chunk, or inside an action chunk.\n\n" +
-		`${lines.join("\n")}`
-	);
+	const guidance = hasDelimiter
+		? "You may call subagents when useful for the current request. Main-agent chunking rules apply only to the main agent: do not start, end, or manage delimiter chunks just for a subagent call, and subagents may be invoked whether the main agent is currently outside a chunk, inside an exploration chunk, or inside an action chunk."
+		: "You may call subagents when useful for the current request.";
+	return `${prompt}\n\n# Available Subagents\n\n${guidance}\n\n${lines.join("\n")}`;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -95,7 +93,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 
 	const contextFiles = providedContextFiles ?? [];
 	const skills = providedSkills ?? [];
-	const promptModeAppend = getPromptModeAppend(promptMode);
+	const tools = selectedTools || ["read", "bash", "edit", "write", "grep", "find", "glob", "ls", "delimiter"];
+	const hasDelimiter = tools.includes("delimiter");
+	const promptModeAppend = getPromptModeAppend(promptMode, { includeDelimiterWorkflow: hasDelimiter });
 	const appendedSections = [appendSystemPrompt, promptModeAppend].filter(
 		(section) => section && section.trim().length > 0,
 	);
@@ -108,9 +108,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 			prompt += appendSection;
 		}
 
-		const customPromptHasRead = !selectedTools || selectedTools.includes("read");
+		const customPromptHasRead = tools.includes("read");
 		prompt = appendProjectContext(prompt, contextFiles, skills, customPromptHasRead);
-		prompt = appendSubagentContext(prompt, subagents);
+		prompt = appendSubagentContext(prompt, subagents, hasDelimiter);
 
 		prompt += `\nCurrent date: ${date}`;
 		prompt += `\nCurrent working directory: ${promptCwd}`;
@@ -121,7 +121,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		return prompt;
 	}
 
-	const tools = selectedTools || ["read", "bash", "edit", "write", "grep", "find", "glob", "ls", "delimiter"];
 	const visibleTools = tools.filter((name) => !!toolSnippets?.[name]);
 	const toolsList =
 		visibleTools.length > 0 ? visibleTools.map((name) => `- ${name}: ${toolSnippets![name]}`).join("\n") : "(none)";
@@ -142,7 +141,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	const hasLs = tools.includes("ls");
 	const hasGlob = tools.includes("glob");
 	const hasRead = tools.includes("read");
-	const hasDelimiter = tools.includes("delimiter");
 
 	if (hasBash && !hasGrep && !hasFind && !hasGlob && !hasLs) {
 		addGuideline("Use bash for file operations like ls, rg, find");
@@ -225,7 +223,7 @@ ${guidelines}`;
 	}
 
 	prompt = appendProjectContext(prompt, contextFiles, skills, hasRead);
-	prompt = appendSubagentContext(prompt, subagents);
+	prompt = appendSubagentContext(prompt, subagents, hasDelimiter);
 
 	prompt += `\nCurrent date: ${date}`;
 	prompt += `\nCurrent working directory: ${promptCwd}`;

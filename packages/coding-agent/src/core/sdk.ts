@@ -61,6 +61,8 @@ export interface CreateAgentSessionOptions {
 	thinkingLevel?: ThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	/** Enable or disable CWL cleanup and prompt workflow instructions for this session. */
+	cwlEnabled?: boolean;
 	/** CWL eviction threshold override for this session. Pass null to use the default threshold. */
 	cwlLimit?: CwlLimit | null;
 
@@ -297,6 +299,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 	const persistentGlobalConfig = loadPersistentGlobalConfig();
+	const cwlEnabledRef: { value: boolean } = {
+		value: options.cwlEnabled !== undefined ? options.cwlEnabled : (persistentGlobalConfig.cwlEnabled ?? true),
+	};
 	const cwlLimitRef: { value: CwlLimit | null } = {
 		value: options.cwlLimit !== undefined ? options.cwlLimit : (persistentGlobalConfig.cwlLimit ?? null),
 	};
@@ -342,6 +347,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const runner = extensionRunnerRef.current;
 			if (runner) {
 				result = await runner.emitContext(result);
+			}
+			if (!cwlEnabledRef.value) {
+				return result;
 			}
 			// Run CWL eviction
 			const currentModel = agent?.state?.model;
@@ -456,6 +464,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		initialActiveToolNames,
 		extensionRunnerRef,
+		cwlEnabledRef,
 		cwlLimitRef,
 		cwlTokenMeasurementModeRef,
 		cwlCleanupListenerRef,

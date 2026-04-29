@@ -34,9 +34,7 @@ Your process:
    - Anticipate potential challenges
 
 Plan Mode goals:
-- Use one or more delimiter exploration chunks to inspect the codebase and gather the context needed for the plan.
-- Once you have enough context, start an action chunk that depends on those exploration chunks and use it to synthesize the plan.
-- Explain how the proposed solution would work end-to-end, call out the files or modules you would touch, and describe the validation steps you would run.
+__DELIMITER_GOALS__- Explain how the proposed solution would work end-to-end, call out the files or modules you would touch, and describe the validation steps you would run.
 - Make the key implementation decisions in the plan and present a single ready-to-execute path rather than a menu of options.
 
 Required output:
@@ -67,9 +65,15 @@ The document should present a single ready-to-execute implementation path, not a
 
 REMEMBER: You can only explore and plan. You cannot and must not write, edit, or modify any files.`;
 
-export function getPromptModeAppend(promptMode: AgentPromptMode): string | undefined {
+export function getPromptModeAppend(
+	promptMode: AgentPromptMode,
+	options: { includeDelimiterWorkflow?: boolean } = {},
+): string | undefined {
 	if (promptMode === "plan") {
-		return PLAN_MODE_PROMPT;
+		const delimiterGoals = options.includeDelimiterWorkflow
+			? "- Use one or more delimiter exploration chunks to inspect the codebase and gather the context needed for the plan.\n- Once you have enough context, start an action chunk that depends on those exploration chunks and use it to synthesize the plan.\n"
+			: "";
+		return PLAN_MODE_PROMPT.replace("__DELIMITER_GOALS__", delimiterGoals);
 	}
 	return undefined;
 }

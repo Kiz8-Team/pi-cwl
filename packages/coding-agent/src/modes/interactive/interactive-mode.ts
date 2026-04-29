@@ -2524,6 +2524,11 @@ ${subagentList}`,
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/cwl-toggle" || text.startsWith("/cwl-toggle ")) {
+				this.handleCwlToggleCommand(text.slice(11).trim());
+				this.editor.setText("");
+				return;
+			}
 			if (text.startsWith("/cwl-mode")) {
 				this.handleCwlModeCommand(text.slice(9).trim());
 				this.editor.setText("");
@@ -4939,7 +4944,9 @@ ${planText}`;
 		const estimatedContext = estimateContextTokens(context.messages);
 		const approxPromptTokens = systemPromptTokens + estimatedContext.tokens;
 		const modelContextWindow = contextUsage?.contextWindow ?? this.session.model?.contextWindow ?? 0;
-		const contextWindow = getEffectiveCwlThreshold(modelContextWindow, this.session.cwlLimit);
+		const contextWindow = this.session.cwlEnabled
+			? getEffectiveCwlThreshold(modelContextWindow, this.session.cwlLimit)
+			: modelContextWindow;
 		const usedTokens = contextUsage?.tokens ?? approxPromptTokens;
 		const percent = contextWindow > 0 ? (usedTokens / contextWindow) * 100 : null;
 		const health = this.getHealthLabel(percent);
@@ -5095,18 +5102,29 @@ ${planText}`;
 		const modelLabel = this.session.model
 			? `${this.session.model.provider} / ${this.session.model.id}`
 			: "(no model)";
-		const chunkCountLabel = `${chunkByName.size} delimiter${chunkByName.size !== 1 ? "s" : ""}`;
+		const chunkCountLabel = this.session.cwlEnabled
+			? `${chunkByName.size} delimiter${chunkByName.size !== 1 ? "s" : ""}`
+			: "disabled";
 		const chunkKindParts = Array.from(chunkTypeCounts.entries()).map(([k, v]) => `${k}=${v}`);
-		const chunkKindSummary = chunkKindParts.length > 0 ? `  (${chunkKindParts.join("  ")})` : "";
+		const chunkKindSummary =
+			this.session.cwlEnabled && chunkKindParts.length > 0 ? `  (${chunkKindParts.join("  ")})` : "";
 		const summaryLines = [
 			`  Model      ${modelLabel}`,
 			`  Health     ${theme.fg(health.color, healthLabel)}`,
 			`  Window     ${windowBar}  ${this.formatTokenCount(usedTokens)} / ${this.formatTokenCount(contextWindow)} tok`,
-			`  CWL        ${this.session.cwlLimit ? "custom" : `default (${DEFAULT_CWL_THRESHOLD_TOKENS.toLocaleString()} tok)`}${modelContextWindow > 0 ? `  |  model max: ${this.formatTokenCount(modelContextWindow)} tok` : ""}`,
-			`  Measure    ${this.session.cwlTokenMeasurementMode === "fast" ? "fast heuristic" : "exact provider count"}`,
+			`  CWL        ${
+				this.session.cwlEnabled
+					? `${this.session.cwlLimit ? "custom" : `default (${DEFAULT_CWL_THRESHOLD_TOKENS.toLocaleString()} tok)`}${modelContextWindow > 0 ? `  |  model max: ${this.formatTokenCount(modelContextWindow)} tok` : ""}`
+					: `disabled${modelContextWindow > 0 ? `  |  model max: ${this.formatTokenCount(modelContextWindow)} tok` : ""}`
+			}`,
+			...(this.session.cwlEnabled
+				? [
+						`  Measure    ${this.session.cwlTokenMeasurementMode === "fast" ? "fast heuristic" : "exact provider count"}`,
+					]
+				: []),
 			`  Payload    ~${this.formatTokenCount(approxPromptTokens)} tok  (system: ${this.formatTokenCount(systemPromptTokens)}  +  messages: ${this.formatTokenCount(estimatedContext.tokens)})`,
 			`  Messages   ${context.messages.length} active  |  ${rawMessages.length} raw`,
-			`  Chunks     ${chunkCountLabel}${chunkKindSummary}  |  ${activeChunk ? `${activeChunk.name} [${activeChunk.type}] active` : "none active"}`,
+			`  Chunks     ${chunkCountLabel}${chunkKindSummary}${this.session.cwlEnabled ? `  |  ${activeChunk ? `${activeChunk.name} [${activeChunk.type}] active` : "none active"}` : ""}`,
 		];
 
 		const info = [
@@ -5124,9 +5142,65 @@ ${planText}`;
 			"",
 			sectionHeader("By Chunk"),
 			"",
-			...(chunkLines.length > 0 ? chunkLines : [theme.fg("dim", "  (none)")]),
+			...(this.session.cwlEnabled
+				? chunkLines.length > 0
+					? chunkLines
+					: [theme.fg("dim", "  (none)")]
+				: [theme.fg("dim", "  CWL disabled")]),
 		].join("\n");
 
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new DynamicBorder());
+		this.chatContainer.addChild(new Text(info, 1, 0));
+		this.chatContainer.addChild(new DynamicBorder());
+		this.ui.requestRender();
+	}
+
+	private handleCwlToggleCommand(arg: string): void {
+		const normalized = arg.trim().toLowerCase();
+		const nextEnabled =
+			normalized === "on" || normalized === "enable" || normalized === "enabled"
+				? true
+				: normalized === "off" || normalized === "disable" || normalized === "disabled"
+					? false
+					: normalized === "status"
+						? this.session.cwlEnabled
+						: !this.session.cwlEnabled;
+		if (normalized && !["on", "enable", "enabled", "off", "disable", "disabled", "status"].includes(normalized)) {
+			const info = [
+				theme.bold(theme.fg("accent", "CWL Toggle")),
+				theme.fg("dim", "─".repeat(56)),
+				"",
+				theme.fg("error", `  Invalid value: "${arg}"`),
+				theme.fg("dim", "  Usage: /cwl-toggle  |  /cwl-toggle on  |  /cwl-toggle off  |  /cwl-toggle status"),
+			].join("\n");
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(new DynamicBorder());
+			this.chatContainer.addChild(new Text(info, 1, 0));
+			this.chatContainer.addChild(new DynamicBorder());
+			this.ui.requestRender();
+			return;
+		}
+
+		if (normalized !== "status") {
+			this.session.setCwlEnabled(nextEnabled);
+			updatePersistentGlobalConfig({ cwlEnabled: nextEnabled });
+		}
+
+		const enabled = this.session.cwlEnabled;
+		const info = [
+			theme.bold(theme.fg("accent", "CWL Toggle")),
+			theme.fg("dim", "─".repeat(56)),
+			"",
+			theme.fg("text", `  CWL is ${enabled ? "enabled" : "disabled"}`),
+			theme.fg(
+				"dim",
+				enabled
+					? "  Cleanup, passive traces, delimiter tool access, and delimiter prompt instructions are active."
+					: "  Cleanup, passive traces, delimiter tool access, and delimiter prompt instructions are disabled.",
+			),
+			theme.fg("dim", "  Usage: /cwl-toggle  |  /cwl-toggle on  |  /cwl-toggle off  |  /cwl-toggle status"),
+		].join("\n");
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new DynamicBorder());
 		this.chatContainer.addChild(new Text(info, 1, 0));

@@ -200,6 +200,8 @@ export interface AgentSessionConfig {
 	baseToolsOverride?: Record<string, AgentTool>;
 	/** Mutable ref used by Agent to access the current ExtensionRunner */
 	extensionRunnerRef?: { current?: ExtensionRunner };
+	/** Mutable ref shared with transformContext to control whether CWL is active. */
+	cwlEnabledRef?: { value: boolean };
 	/** Mutable ref shared with transformContext to control CWL eviction threshold. */
 	cwlLimitRef?: { value: CwlLimit | null };
 	/** Mutable ref shared with transformContext to report CWL cleanup activity. */
@@ -343,6 +345,7 @@ export class AgentSession {
 	private _baseToolDefinitions: Map<string, ToolDefinition> = new Map();
 	private _cwd: string;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
+	private _cwlEnabledRef?: { value: boolean };
 	private _cwlLimitRef?: { value: CwlLimit | null };
 	private _cwlTokenMeasurementModeRef?: { value: CwlTokenMeasurementMode };
 	private _initialActiveToolNames?: string[];
@@ -385,6 +388,7 @@ export class AgentSession {
 		this._cwd = config.cwd;
 		this._modelRegistry = config.modelRegistry;
 		this._extensionRunnerRef = config.extensionRunnerRef;
+		this._cwlEnabledRef = config.cwlEnabledRef;
 		this._cwlLimitRef = config.cwlLimitRef;
 		this._cwlTokenMeasurementModeRef = config.cwlTokenMeasurementModeRef;
 		this._cwlCleanupListenerRef = config.cwlCleanupListenerRef;
@@ -477,10 +481,13 @@ export class AgentSession {
 			activeToolNames: this._initialActiveToolNames,
 			includeAllExtensionTools: true,
 		});
-		this._writePassiveCwlTrace();
+		if (this.cwlEnabled) {
+			this._writePassiveCwlTrace();
+		}
 	}
 
 	private _writePassiveCwlTrace(): void {
+		if (!this.cwlEnabled) return;
 		try {
 			writeCwlTrace({
 				sessionManager: this.sessionManager,
@@ -496,6 +503,31 @@ export class AgentSession {
 	/** Model registry for API key resolution and model discovery */
 	get modelRegistry(): ModelRegistry {
 		return this._modelRegistry;
+	}
+
+	/** Whether CWL cleanup, tracing, and prompt workflow instructions are enabled. */
+	get cwlEnabled(): boolean {
+		return this._cwlEnabledRef?.value ?? true;
+	}
+
+	/** Enable or disable all CWL behavior for this session. */
+	setCwlEnabled(enabled: boolean): void {
+		if (this._cwlEnabledRef) {
+			this._cwlEnabledRef.value = enabled;
+		}
+
+		const activeTools = this.getActiveToolNames();
+		if (enabled) {
+			if (!activeTools.includes("delimiter") && this._toolRegistry.has("delimiter")) {
+				this.setActiveToolsByName([...activeTools, "delimiter"]);
+			} else {
+				this.setActiveToolsByName(activeTools);
+			}
+			this._writePassiveCwlTrace();
+			return;
+		}
+
+		this.setActiveToolsByName(activeTools.filter((name) => name !== "delimiter"));
 	}
 
 	/** Current CWL eviction threshold (null = default 150,000 tokens). */
@@ -999,9 +1031,10 @@ export class AgentSession {
 	 * Changes take effect on the next agent turn.
 	 */
 	setActiveToolsByName(toolNames: string[]): void {
+		const effectiveToolNames = this.cwlEnabled ? toolNames : toolNames.filter((name) => name !== "delimiter");
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
-		for (const name of toolNames) {
+		for (const name of effectiveToolNames) {
 			const tool = this._toolRegistry.get(name);
 			if (tool) {
 				tools.push(tool);
@@ -2797,7 +2830,7 @@ export class AgentSession {
 		}
 
 		const defaultActiveToolNames = this._baseToolsOverride
-			? Object.keys(this._baseToolsOverride)
+			? Object.keys(this._baseToolsOverride).filter((name) => this.cwlEnabled || name !== "delimiter")
 			: [
 					"read",
 					"bash",
@@ -2813,7 +2846,9 @@ export class AgentSession {
 					"CronDelete",
 					"Sleep",
 				];
-		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
+		const baseActiveToolNames = (options.activeToolNames ?? defaultActiveToolNames).filter(
+			(name) => this.cwlEnabled || name !== "delimiter",
+		);
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
 			includeAllExtensionTools: options.includeAllExtensionTools,

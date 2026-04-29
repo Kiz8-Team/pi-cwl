@@ -123,7 +123,7 @@ export class FooterComponent implements Component {
 			statsParts.push(costStr);
 		}
 
-		const cwlThreshold = getEffectiveCwlThreshold(contextWindow, this.session.cwlLimit);
+		const cwlThreshold = this.session.cwlEnabled ? getEffectiveCwlThreshold(contextWindow, this.session.cwlLimit) : 0;
 		if (cwlThreshold > 0) {
 			if (contextTokens !== null) {
 				statsParts.push(`CWL${formatTokens(contextTokens)}≤${formatTokens(cwlThreshold)}`);
