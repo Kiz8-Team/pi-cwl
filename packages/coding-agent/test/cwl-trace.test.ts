@@ -250,7 +250,7 @@ describe("passive CWL trace writing", () => {
 
 		const data = JSON.parse(readFileSync(tracePath!, "utf8"));
 		expect(data.sessionID).toBe(session.getSessionId());
-		expect(data.trace.threshold.default).toBe(150000);
+		expect(data.trace.threshold.default).toBe(80000);
 		expect(data.trace.threshold.max).toBe(183616);
 		expect(data.trace.chunks.history).toHaveLength(3);
 		expect(data.trace.chunks.current).toHaveLength(1);

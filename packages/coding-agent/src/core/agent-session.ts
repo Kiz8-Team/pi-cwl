@@ -530,12 +530,12 @@ export class AgentSession {
 		this.setActiveToolsByName(activeTools.filter((name) => name !== "delimiter"));
 	}
 
-	/** Current CWL eviction threshold (null = default 150,000 tokens). */
+	/** Current CWL eviction threshold (null = default 80,000 tokens). */
 	get cwlLimit(): CwlLimit | null {
 		return this._cwlLimitRef?.value ?? null;
 	}
 
-	/** Set the CWL eviction threshold. Pass null to restore the default (150,000 tokens). */
+	/** Set the CWL eviction threshold. Pass null to restore the default (80,000 tokens). */
 	setCwlLimit(limit: CwlLimit | null): void {
 		if (this._cwlLimitRef) {
 			this._cwlLimitRef.value = limit;

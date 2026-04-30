@@ -121,12 +121,12 @@ describe("parseCwlLimit", () => {
 	it("accepts token thresholds above the default threshold", () => {
 		expect(parseCwlLimit("150001")).toEqual({ type: "tokens", value: 150001 });
 		expect(parseCwlLimit("151k")).toEqual({ type: "tokens", value: 151000 });
-		expect(parseCwlLimit(`${DEFAULT_CWL_THRESHOLD_TOKENS}`)).toEqual({ type: "tokens", value: 150000 });
+		expect(parseCwlLimit(`${DEFAULT_CWL_THRESHOLD_TOKENS}`)).toEqual({ type: "tokens", value: 80000 });
 	});
 });
 
 describe("getEffectiveCwlThreshold", () => {
-	it("defaults to 150,000 tokens and does not cap explicit limits", () => {
+	it("defaults to 80,000 tokens and does not cap explicit limits", () => {
 		expect(getEffectiveCwlThreshold(400_000)).toBe(DEFAULT_CWL_THRESHOLD_TOKENS);
 		expect(getEffectiveCwlThreshold(400_000, { type: "percent", value: 90 })).toBe(360_000);
 		expect(getEffectiveCwlThreshold(400_000, { type: "tokens", value: 200_000 })).toBe(200_000);

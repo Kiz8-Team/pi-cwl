@@ -6,7 +6,9 @@ It is a fork of the open-source [pi.dev](https://pi.dev/) terminal coding agent,
 
 > **Beyond Compaction: Structured Context Eviction for Long-Horizon Agents**  
 > Andrew Semenov, Svyatoslav Dorofeev — Kiz8  
-> _arXiv preprint, 2026_
+> _Preprint manuscript, 2026_
+
+We opened this repository before the arXiv paper went public. The arXiv submission has been stalled since April 21 2026, and we decided not to wait any longer to share the paper and reference implementation.
 
 ---
 
@@ -99,17 +101,4 @@ packages/
 
 ## Citation
 
-```bibtex
-@article{semenov2025cwl,
-  title   = {Beyond Compaction: Structured Context Eviction for Long-Horizon Agents},
-  author  = {Semenov, Andrew and Dorofeev, Svyatoslav},
-  year    = {2026},
-  note    = {arXiv preprint}
-}
-```
-
----
-
-## License
-
-See [LICENSE](LICENSE).
+Pending
