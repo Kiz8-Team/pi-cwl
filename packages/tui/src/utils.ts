@@ -1066,3 +1066,46 @@ export function extractSegments(
 
 	return { before, beforeWidth, after, afterWidth };
 }
+
+/** Styling callbacks for a button embedded in a horizontal border line. */
+export interface BorderButtonStyles {
+	/** Horizontal rule segments on either side of the button. */
+	line: (text: string) => string;
+	/** Button label background. */
+	background: (text: string) => string;
+	/** Button label text. */
+	text: (text: string) => string;
+}
+
+export interface BorderButtonLayout {
+	line: string;
+	colStart: number;
+	colEnd: number;
+}
+
+/** Render a full-width border line with a centered button label inset into it. */
+export function renderBorderWithCenterButton(
+	width: number,
+	label: string,
+	styles: BorderButtonStyles,
+): BorderButtonLayout {
+	const safeWidth = Math.max(1, width);
+	const labelText = ` ${label} `;
+	const styledButton = styles.background(styles.text(labelText));
+	const buttonWidth = visibleWidth(styledButton);
+
+	if (buttonWidth >= safeWidth) {
+		const line = truncateToWidth(styledButton, safeWidth);
+		return { line, colStart: 0, colEnd: Math.max(0, visibleWidth(line) - 1) };
+	}
+
+	const remaining = safeWidth - buttonWidth;
+	const leftDashes = Math.floor(remaining / 2);
+	const rightDashes = remaining - leftDashes;
+	const line = styles.line("─".repeat(leftDashes)) + styledButton + styles.line("─".repeat(rightDashes));
+	return {
+		line: truncateToWidth(line, safeWidth),
+		colStart: leftDashes,
+		colEnd: leftDashes + buttonWidth - 1,
+	};
+}

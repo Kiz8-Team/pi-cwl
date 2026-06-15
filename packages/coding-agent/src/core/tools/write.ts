@@ -260,6 +260,7 @@ export function createWriteToolDefinition(
 			);
 		},
 		noBg: true,
+		streamingVisible: true,
 		renderCall(args, theme, context) {
 			const renderArgs = args as { path?: string; file_path?: string; content?: string } | undefined;
 			const rawPath = str(renderArgs?.file_path ?? renderArgs?.path);

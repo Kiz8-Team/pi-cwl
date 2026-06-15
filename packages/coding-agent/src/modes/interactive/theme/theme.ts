@@ -1143,6 +1143,10 @@ export function getEditorTheme(): EditorTheme {
 	return {
 		borderColor: (text: string) => theme.fg("borderMuted", text),
 		selectList: getSelectListTheme(),
+		goBackButton: {
+			background: (text: string) => theme.bg("selectedBg", text),
+			text: (text: string) => theme.fg("text", text),
+		},
 	};
 }
 

@@ -1,6 +1,12 @@
 import * as os from "node:os";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
-import { getCapabilities, getImageDimensions, imageFallback } from "@mariozechner/pi-tui";
+import {
+	getCapabilities,
+	getImageDimensions,
+	imageFallback,
+	truncateToWidth,
+	visibleWidth,
+} from "@mariozechner/pi-tui";
 import stripAnsi from "strip-ansi";
 import { theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../utils/shell.js";
@@ -26,6 +32,30 @@ export function replaceTabs(text: string): string {
 
 export function normalizeDisplayText(text: string): string {
 	return text.replace(/\r/g, "");
+}
+
+/** Render a centered boundary line with muted dashes around a styled label. */
+export function renderBoundaryLine(
+	styledLabel: string,
+	width: number,
+	theme: { fg: (name: "muted", text: string) => string },
+): string {
+	const safeWidth = Math.max(1, width);
+	const styledWidth = visibleWidth(styledLabel);
+	if (styledWidth >= safeWidth) {
+		return truncateToWidth(styledLabel, safeWidth);
+	}
+	const remaining = safeWidth - styledWidth - 2;
+	if (remaining < 0) {
+		return truncateToWidth(styledLabel, safeWidth);
+	}
+	if (remaining === 0) {
+		return ` ${styledLabel} `;
+	}
+	const left = Math.floor(remaining / 2);
+	const right = remaining - left;
+	const dash = theme.fg("muted", "─");
+	return `${dash.repeat(left)} ${styledLabel} ${dash.repeat(right)}`;
 }
 
 export function indentToolBlock(text: string, options?: { firstPrefix?: string; restPrefix?: string }): string {

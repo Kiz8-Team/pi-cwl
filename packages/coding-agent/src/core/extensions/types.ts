@@ -397,8 +397,16 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	/** When true, the tool call box renders without a background color (read/edit file tools use this for a cleaner diff view) */
 	noBg?: boolean;
 
+	/** When true, the tool call component is added to the chat immediately during argument streaming (before message_end).
+	 * Use this for tools whose renderCall shows meaningful live content as args arrive (e.g. write shows file contents, edit shows a diff preview). */
+	streamingVisible?: boolean;
+
 	/** Custom rendering for tool call display */
-	renderCall?: (args: Static<TParams>, theme: Theme, context: ToolRenderContext<TState, Static<TParams>>) => Component;
+	renderCall?: (
+		args: Static<TParams>,
+		theme: Theme,
+		context: ToolRenderContext<TState, Static<TParams>>,
+	) => Component | null;
 
 	/** Custom rendering for tool result display */
 	renderResult?: (
@@ -406,7 +414,7 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 		options: ToolRenderResultOptions,
 		theme: Theme,
 		context: ToolRenderContext<TState, Static<TParams>>,
-	) => Component;
+	) => Component | null;
 }
 
 type AnyToolDefinition = ToolDefinition<any, any, any>;

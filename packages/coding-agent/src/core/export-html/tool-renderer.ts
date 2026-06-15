@@ -95,6 +95,7 @@ export function createToolHtmlRenderer(deps: ToolHtmlRendererDeps): ToolHtmlRend
 					theme,
 					createRenderContext(toolCallId, renderedCallComponents.get(toolCallId), false, true, false),
 				);
+				if (!component) return undefined;
 				renderedCallComponents.set(toolCallId, component);
 				const lines = component.render(width);
 				return ansiLinesToHtml(lines);
@@ -132,6 +133,7 @@ export function createToolHtmlRenderer(deps: ToolHtmlRendererDeps): ToolHtmlRend
 					theme,
 					createRenderContext(toolCallId, renderedResultComponents.get(toolCallId), false, false, isError),
 				);
+				if (!collapsedComponent) return undefined;
 				renderedResultComponents.set(toolCallId, collapsedComponent);
 				const collapsed = ansiLinesToHtml(collapsedComponent.render(width));
 
@@ -142,6 +144,7 @@ export function createToolHtmlRenderer(deps: ToolHtmlRendererDeps): ToolHtmlRend
 					theme,
 					createRenderContext(toolCallId, renderedResultComponents.get(toolCallId), true, false, isError),
 				);
+				if (!expandedComponent) return undefined;
 				renderedResultComponents.set(toolCallId, expandedComponent);
 				const expanded = ansiLinesToHtml(expandedComponent.render(width));
 

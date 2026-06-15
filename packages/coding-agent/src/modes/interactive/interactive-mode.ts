@@ -134,9 +134,6 @@ type CompactionQueuedMessage = {
 	mode: "steer" | "followUp";
 };
 
-const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
-	"Anthropic subscription auth is active. Third-party usage now draws from extra usage and is billed per token, not your Claude plan limits. Manage extra usage at https://claude.ai/settings/usage.";
-
 const TUI_APP_NAME = "Pi with CWL";
 
 const SUBAGENT_MAIN_SELECTOR = "Main";
@@ -161,10 +158,6 @@ const SUBAGENT_TOOL_NAME_MAP: Record<SubagentToolName, string> = {
 	Delimiter: "delimiter",
 	Subagent: "Subagent",
 };
-
-function isAnthropicSubscriptionAuthKey(apiKey: string | undefined): boolean {
-	return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
-}
 
 /**
  * Options for InteractiveMode initialization.
@@ -213,7 +206,6 @@ export class InteractiveMode {
 	private lastEscapeTime = 0;
 	private changelogMarkdown: string | undefined = undefined;
 	private startupNoticesShown = false;
-	private anthropicSubscriptionWarningShown = false;
 
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
@@ -225,6 +217,9 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	// Buffer for tool call components while LLM is still streaming their arguments.
+	// They are moved into pendingTools (and added to chatContainer) only at message_end.
+	private streamingTools = new Map<string, ToolExecutionComponent>();
 	private subagentRenderStack: ToolExecutionComponent[] = [];
 
 	// Tool output expansion state
@@ -863,6 +858,9 @@ export class InteractiveMode {
 		this.ui.addChild(this.editorContainer);
 		this.ui.addChild(this.widgetContainerBelow);
 		this.ui.addChild(this.footer);
+		// Keep editor, widgets, and footer pinned while chat history scrolls.
+		this.ui.setPinnedChildStart(4);
+		this.ui.setGoBackButtonAnchor(this.editorContainer);
 		this.ui.setFocus(this.editor);
 
 		this.setupKeyHandlers();
@@ -947,8 +945,6 @@ export class InteractiveMode {
 		if (modelFallbackMessage) {
 			this.showWarning(modelFallbackMessage);
 		}
-
-		void this.maybeWarnAboutAnthropicSubscriptionAuth();
 
 		// Process initial messages
 		if (initialMessage) {
@@ -2564,12 +2560,6 @@ ${subagentList}`,
 				await this.handleClearCommand();
 				return;
 			}
-			if (text === "/compact" || text.startsWith("/compact ")) {
-				const customInstructions = text.startsWith("/compact ") ? text.slice(9).trim() : undefined;
-				this.editor.setText("");
-				await this.handleCompactCommand(customInstructions);
-				return;
-			}
 			if (text === "/reload") {
 				this.editor.setText("");
 				await this.handleReloadCommand();
@@ -2749,7 +2739,8 @@ ${subagentList}`,
 
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
-							if (!this.pendingTools.has(content.id)) {
+							if (!this.streamingTools.has(content.id) && !this.pendingTools.has(content.id)) {
+								const toolDef = this.getRegisteredToolDefinition(content.name);
 								const component = new ToolExecutionComponent(
 									content.name,
 									content.id,
@@ -2757,15 +2748,23 @@ ${subagentList}`,
 									{
 										showImages: this.settingsManager.getShowImages(),
 									},
-									this.getRegisteredToolDefinition(content.name),
+									toolDef,
 									this.ui,
 									this.sessionManager.getCwd(),
 								);
 								component.setExpanded(this.toolOutputExpanded);
-								this.chatContainer.addChild(component);
-								this.pendingTools.set(content.id, component);
+								if (toolDef?.streamingVisible) {
+									// Show immediately so the user sees content as it streams
+									// (e.g. write shows file contents, edit shows a live diff).
+									this.chatContainer.addChild(component);
+									this.pendingTools.set(content.id, component);
+								} else {
+									// Buffer until message_end so the chip only appears once
+									// the LLM has finished writing all args.
+									this.streamingTools.set(content.id, component);
+								}
 							} else {
-								const component = this.pendingTools.get(content.id);
+								const component = this.streamingTools.get(content.id) ?? this.pendingTools.get(content.id);
 								if (component) {
 									component.updateArgs(content.arguments);
 								}
@@ -2801,6 +2800,8 @@ ${subagentList}`,
 						if (!errorMessage) {
 							errorMessage = this.streamingMessage.errorMessage || "Error";
 						}
+						// Discard buffered streaming tools — they were never shown, so just drop them.
+						this.streamingTools.clear();
 						for (const [, component] of this.pendingTools.entries()) {
 							component.updateResult({
 								content: [{ type: "text", text: errorMessage }],
@@ -2809,7 +2810,13 @@ ${subagentList}`,
 						}
 						this.pendingTools.clear();
 					} else {
-						// Args are now complete - trigger diff computation for edit tools
+						// Args are now complete — move buffered streaming tools into the visible
+						// chat and trigger diff computation for edit tools.
+						for (const [id, component] of this.streamingTools.entries()) {
+							this.chatContainer.addChild(component);
+							this.pendingTools.set(id, component);
+						}
+						this.streamingTools.clear();
 						for (const [, component] of this.pendingTools.entries()) {
 							component.setArgsComplete();
 						}
@@ -3583,7 +3590,6 @@ ${planText}`;
 				const reasoningEffort = this.session.getReasoningEffort();
 				const effortStr = result.model.reasoning ? ` (effort: ${reasoningEffort})` : "";
 				this.showStatus(`Switched to ${result.model.name || result.model.id}${effortStr}`);
-				void this.maybeWarnAboutAnthropicSubscriptionAuth(result.model);
 			}
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
@@ -4040,7 +4046,6 @@ ${planText}`;
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
 				this.showStatus(`Model: ${model.id}`);
-				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 				this.checkDaxnutsEasterEgg(model);
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
@@ -4121,35 +4126,6 @@ ${planText}`;
 		this.footerDataProvider.setAvailableProviderCount(uniqueProviders.size);
 	}
 
-	private async maybeWarnAboutAnthropicSubscriptionAuth(
-		model: Model<any> | undefined = this.session.model,
-	): Promise<void> {
-		if (this.anthropicSubscriptionWarningShown) {
-			return;
-		}
-		if (!model || model.provider !== "anthropic") {
-			return;
-		}
-
-		const storedCredential = this.session.modelRegistry.authStorage.get("anthropic");
-		if (storedCredential?.type === "oauth") {
-			this.anthropicSubscriptionWarningShown = true;
-			this.showWarning(ANTHROPIC_SUBSCRIPTION_AUTH_WARNING);
-			return;
-		}
-
-		try {
-			const apiKey = await this.session.modelRegistry.getApiKeyForProvider(model.provider);
-			if (!isAnthropicSubscriptionAuthKey(apiKey)) {
-				return;
-			}
-			this.anthropicSubscriptionWarningShown = true;
-			this.showWarning(ANTHROPIC_SUBSCRIPTION_AUTH_WARNING);
-		} catch {
-			// Ignore auth lookup failures for warning-only checks.
-		}
-	}
-
 	private showModelSelector(initialSearchInput?: string): void {
 		this.showSelector((done) => {
 			const selector = new ModelSelectorComponent(
@@ -4165,7 +4141,6 @@ ${planText}`;
 						this.updateEditorBorderColor();
 						done();
 						this.showStatus(`Model: ${model.id}`);
-						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 						this.checkDaxnutsEasterEgg(model);
 					} catch (error) {
 						done();
@@ -5594,28 +5569,6 @@ ${planText}`;
 
 		this.bashComponent = undefined;
 		this.ui.requestRender();
-	}
-
-	private async handleCompactCommand(customInstructions?: string): Promise<void> {
-		const entries = this.sessionManager.getEntries();
-		const messageCount = entries.filter((e) => e.type === "message").length;
-
-		if (messageCount < 2) {
-			this.showWarning("Nothing to compact (no messages yet)");
-			return;
-		}
-
-		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
-		}
-		this.statusContainer.clear();
-
-		try {
-			await this.session.compact(customInstructions);
-		} catch {
-			// Ignore, will be emitted as an event
-		}
 	}
 
 	stop(): void {

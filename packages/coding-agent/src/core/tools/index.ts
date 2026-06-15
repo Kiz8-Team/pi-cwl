@@ -111,6 +111,7 @@ import {
 	createBashTool,
 	createBashToolDefinition,
 } from "./bash.js";
+import { delimiterToolDefinition } from "./delimiter.js";
 import { createEditTool, createEditToolDefinition, editTool, editToolDefinition } from "./edit.js";
 import { createFindTool, createFindToolDefinition, findTool, findToolDefinition } from "./find.js";
 import { createGlobTool, createGlobToolDefinition, globTool, globToolDefinition } from "./glob.js";
@@ -151,6 +152,7 @@ export const allToolDefinitions = {
 	find: findToolDefinition,
 	glob: globToolDefinition,
 	ls: lsToolDefinition,
+	delimiter: delimiterToolDefinition,
 };
 
 export type ToolName = keyof typeof allTools;

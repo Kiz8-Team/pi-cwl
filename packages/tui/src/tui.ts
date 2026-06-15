@@ -28,7 +28,12 @@ export interface Component {
 	handleInput?(data: string): void;
 
 	/**
-	 * If true, component receives key release events (Kitty protocol).
+	 * Optional handler for mouse input when component has focus.
+	 * Return true to consume the event (prevent default TUI scroll/selection).
+	 */
+	handleMouseInput?(data: string): boolean;
+
+	/**
 	 * Default is false - release events are filtered out.
 	 */
 	wantsKeyRelease?: boolean;
@@ -42,6 +47,13 @@ export interface Component {
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
+
+/** Strip ANSI/OSC escape sequences, leaving plain text (used for clipboard copy). */
+const ANSI_OSC_PATTERN = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+const ANSI_CSI_PATTERN = /\x1b[[\]()#;?]*(?:\d{1,4}(?:;\d{0,4})*)?[0-9A-PR-TZcf-ntqry=><~]/g;
+function stripAnsiToPlain(input: string): string {
+	return input.replace(ANSI_OSC_PATTERN, "").replace(ANSI_CSI_PATTERN, "");
+}
 
 /**
  * Interface for components that can receive focus and display a hardware cursor.
@@ -237,6 +249,36 @@ export class TUI extends Container {
 	private fullRedrawCount = 0;
 	private stopped = false;
 
+	// Alternate-screen rendering with an app-managed scroll window.
+	// The TUI keeps the full content buffer and renders only a `height`-tall
+	// window of it, addressing rows with absolute cursor positioning (valid on
+	// the alternate screen, which has no scrollback of its own). This lets the
+	// user scroll up without new output yanking the viewport back to the bottom.
+	private readonly legacyScrollback = process.env.PI_TUI_SCROLLBACK === "1";
+	private altScreenActive = false;
+	private scrollOffset = 0; // Index of the topmost content line currently shown
+	private followBottom = true; // When true, the window sticks to the bottom of the content
+	private totalContentLines = 0; // Length of the most recently rendered scrollable content
+	private lastContentLines: string[] = []; // Full composited content from the last render (for copy)
+
+	// Children from `pinnedChildStart` onward are pinned to the bottom of the screen
+	// (e.g. editor, widgets, footer) and do not scroll with the chat history.
+	private pinnedChildStart = -1;
+	private scrollAreaHeight = 0; // Visible rows for scrollable content (updated each render)
+	private pinnedAreaStart = 0; // Screen row where pinned content begins
+	private goBackButtonRow = -1; // Screen row of the editor top border when the button is shown
+	private goBackButtonAnchor: Component | null = null;
+	private goBackButtonHit: { colStart: number; colEnd: number } | null = null;
+	private lastPinnedLineCount = 0;
+	private lastScrollableLineCount = 0;
+
+	// TUI-level text selection (so mouse reporting can be on for scrolling while
+	// drag-to-select still copies text). Coordinates are absolute content
+	// positions: `line` indexes into the full content, `col` is a 0-based visual column.
+	private selectionAnchor: { line: number; col: number } | null = null;
+	private selectionFocus: { line: number; col: number } | null = null;
+	private selecting = false;
+
 	// Overlay stack for modal components rendered on top of base content
 	private focusOrderCounter = 0;
 	private overlayStack: {
@@ -283,6 +325,36 @@ export class TUI extends Container {
 	 */
 	setClearOnShrink(enabled: boolean): void {
 		this.clearOnShrink = enabled;
+	}
+
+	/**
+	 * Pin children from the given index to the bottom of the screen. Earlier children
+	 * scroll normally; pinned children (editor, footer, etc.) stay visible while scrolling.
+	 * Pass -1 to disable pinning (default).
+	 */
+	setPinnedChildStart(index: number): void {
+		this.pinnedChildStart = index;
+		this.requestRender();
+	}
+
+	/** Pin the go-back button to the first line of this child (typically the editor container). */
+	setGoBackButtonAnchor(component: Component | null): void {
+		this.goBackButtonAnchor = component;
+		this.requestRender();
+	}
+
+	/** Whether chat history is scrolled up and the go-back button should appear in the editor border. */
+	showGoBackDown(): boolean {
+		return this.hasPinnedChildren() && !this.followBottom && this.totalContentLines > 0;
+	}
+
+	/** Called by Editor while rendering the go-back button border. */
+	setGoBackButtonHitBox(colStart: number, colEnd: number): void {
+		this.goBackButtonHit = { colStart, colEnd };
+	}
+
+	clearGoBackButtonHitBox(): void {
+		this.goBackButtonHit = null;
 	}
 
 	setFocus(component: Component | null): void {
@@ -417,10 +489,21 @@ export class TUI extends Container {
 
 	start(): void {
 		this.stopped = false;
+		this.followBottom = true;
+		this.scrollOffset = 0;
 		this.terminal.start(
 			(data) => this.handleInput(data),
 			() => this.requestRender(),
 		);
+		if (!this.legacyScrollback) {
+			// Enter the alternate screen and enable SGR mouse reporting with
+			// button-event (drag) tracking. The terminal hands us scroll-wheel and
+			// drag events, so the trackpad scrolls and we implement drag-to-select +
+			// copy ourselves (see handleMouseInput). 1002 = report motion while a
+			// button is held; 1006 = SGR extended coordinates.
+			this.terminal.write("\x1b[?1049h\x1b[2J\x1b[H\x1b[?1000h\x1b[?1002h\x1b[?1006h");
+			this.altScreenActive = true;
+		}
 		this.terminal.hideCursor();
 		this.queryCellSize();
 		this.requestRender();
@@ -453,8 +536,15 @@ export class TUI extends Container {
 			clearTimeout(this.renderTimer);
 			this.renderTimer = undefined;
 		}
-		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
-		if (this.previousLines.length > 0) {
+
+		if (this.altScreenActive) {
+			// Disable mouse reporting and leave the alternate screen, which restores
+			// whatever was on the terminal before the TUI started.
+			this.terminal.write("\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l");
+			this.altScreenActive = false;
+		} else if (this.previousLines.length > 0) {
+			// Legacy scrollback path: move the cursor to the end of the content to
+			// prevent overwriting/artifacts on exit.
 			const targetRow = this.previousLines.length; // Line after the last content
 			const lineDiff = targetRow - this.hardwareCursorRow;
 			if (lineDiff > 0) {
@@ -478,6 +568,10 @@ export class TUI extends Container {
 			this.hardwareCursorRow = 0;
 			this.maxLinesRendered = 0;
 			this.previousViewportTop = 0;
+			this.scrollOffset = 0;
+			this.followBottom = true;
+			this.clearSelection();
+			this.selecting = false;
 			if (this.renderTimer) {
 				clearTimeout(this.renderTimer);
 				this.renderTimer = undefined;
@@ -541,6 +635,12 @@ export class TUI extends Container {
 			return;
 		}
 
+		// Own scrolling and text selection on the alternate screen
+		// (mouse wheel / drag-select + Shift+PageUp/Down).
+		if (this.handleMouseInput(data) || this.handleScrollInput(data)) {
+			return;
+		}
+
 		// Global debug key handler (Shift+Ctrl+D)
 		if (matchesKey(data, "shift+ctrl+d") && this.onDebug) {
 			this.onDebug();
@@ -570,6 +670,233 @@ export class TUI extends Container {
 			}
 			this.focusedComponent.handleInput(data);
 			this.requestRender();
+		}
+	}
+
+	/**
+	 * Handle keyboard scroll gestures on the alternate screen. Returns true when
+	 * the input was a scroll key (and should not be forwarded to the focused
+	 * component). We use Shift+PageUp/PageDown so plain PageUp/PageDown still work
+	 * for the editor.
+	 */
+	private handleScrollInput(data: string): boolean {
+		if (this.legacyScrollback) return false;
+
+		const page = this.getScrollPageSize();
+		if (matchesKey(data, "shift+pageUp")) {
+			this.scrollBy(-page);
+			return true;
+		}
+		if (matchesKey(data, "shift+pageDown")) {
+			this.scrollBy(page);
+			return true;
+		}
+
+		return false;
+	}
+
+	private static readonly WHEEL_SCROLL_LINES = 3;
+
+	private hasPinnedChildren(): boolean {
+		return this.pinnedChildStart >= 0 && this.pinnedChildStart < this.children.length;
+	}
+
+	private renderChildRange(width: number, start: number, end: number): string[] {
+		const lines: string[] = [];
+		for (let i = start; i < end && i < this.children.length; i++) {
+			const childLines = this.children[i].render(width);
+			for (const line of childLines) {
+				lines.push(line);
+			}
+		}
+		return lines;
+	}
+
+	private getScrollPageSize(): number {
+		const page = this.hasPinnedChildren() ? this.scrollAreaHeight : this.terminal.rows;
+		return Math.max(1, page - 1);
+	}
+
+	private isGoBackButtonClick(screenRow: number, col: number): boolean {
+		return (
+			this.goBackButtonRow >= 0 &&
+			this.goBackButtonHit !== null &&
+			screenRow === this.goBackButtonRow &&
+			col >= this.goBackButtonHit.colStart &&
+			col <= this.goBackButtonHit.colEnd
+		);
+	}
+
+	private screenRowToContentLine(screenRow: number): { line: number; col: number } | null {
+		if (screenRow < this.scrollAreaHeight) {
+			return { line: this.scrollOffset + screenRow, col: 0 };
+		}
+		if (screenRow >= this.pinnedAreaStart) {
+			const pinnedRow = screenRow - this.pinnedAreaStart;
+			return { line: this.lastScrollableLineCount + pinnedRow, col: 0 };
+		}
+		return null;
+	}
+
+	/**
+	 * Handle SGR mouse events: focused components may consume clicks/scroll first;
+	 * otherwise scroll wheel scrolls the window and left-button drag selects text.
+	 * Returns true when the input was a mouse event.
+	 */
+	private handleMouseInput(data: string): boolean {
+		if (this.legacyScrollback) return false;
+		const match = data.match(/^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/);
+		if (!match) return false;
+
+		const code = Number(match[1]);
+		const col = Number(match[2]);
+		const row = Number(match[3]);
+		const isRelease = match[4] === "m";
+
+		// Let the focused component handle mouse first (clicks, wheel, etc.).
+		if (this.focusedComponent?.handleMouseInput?.(data)) {
+			return true;
+		}
+
+		// Scroll wheel (64 = up, 65 = down).
+		if (code === 64) {
+			this.scrollBy(-TUI.WHEEL_SCROLL_LINES);
+			return true;
+		}
+		if (code === 65) {
+			this.scrollBy(TUI.WHEEL_SCROLL_LINES);
+			return true;
+		}
+
+		const button = code & 3;
+		const isMotion = (code & 32) !== 0;
+
+		// Map screen coordinates (1-based) to absolute content coordinates.
+		const height = this.terminal.rows;
+		const screenRow = Math.max(0, Math.min(height - 1, row - 1));
+
+		// "Go back down" button click scrolls to the latest agent output.
+		const clickCol = Math.max(0, col - 1);
+		if (button === 0 && isRelease && !this.hasSelection() && this.isGoBackButtonClick(screenRow, clickCol)) {
+			this.scrollToBottom();
+			return true;
+		}
+		if (button === 0 && !isMotion && !isRelease && this.isGoBackButtonClick(screenRow, clickCol)) {
+			return true;
+		}
+
+		const mapped = this.screenRowToContentLine(screenRow);
+		if (!mapped) {
+			return true;
+		}
+		const point = { line: mapped.line, col: Math.max(0, col - 1) };
+
+		if (button === 0 && !isMotion && !isRelease) {
+			// Left press: begin a new selection.
+			this.selecting = true;
+			this.selectionAnchor = point;
+			this.selectionFocus = point;
+			this.requestRender();
+			return true;
+		}
+
+		if (button === 0 && isMotion && this.selecting) {
+			// Left drag: extend the selection.
+			this.selectionFocus = point;
+			this.requestRender();
+			return true;
+		}
+
+		if (isRelease) {
+			if (this.selecting) {
+				this.selecting = false;
+				const text = this.getSelectedText();
+				if (text) {
+					this.copyToClipboard(text);
+				} else {
+					// A plain click (no drag) clears any existing selection.
+					this.clearSelection();
+				}
+				this.requestRender();
+			}
+			return true;
+		}
+
+		// Swallow all other mouse events (other buttons, hover, etc.).
+		return true;
+	}
+
+	/** Whether a non-empty selection currently exists. */
+	private hasSelection(): boolean {
+		if (!this.selectionAnchor || !this.selectionFocus) return false;
+		return (
+			this.selectionAnchor.line !== this.selectionFocus.line || this.selectionAnchor.col !== this.selectionFocus.col
+		);
+	}
+
+	private clearSelection(): void {
+		this.selectionAnchor = null;
+		this.selectionFocus = null;
+	}
+
+	/** Return [start, end] of the current selection in content coordinates (start <= end). */
+	private normalizedSelection(): { start: { line: number; col: number }; end: { line: number; col: number } } | null {
+		const a = this.selectionAnchor;
+		const b = this.selectionFocus;
+		if (!a || !b) return null;
+		const aBeforeB = a.line < b.line || (a.line === b.line && a.col <= b.col);
+		return aBeforeB ? { start: a, end: b } : { start: b, end: a };
+	}
+
+	/** Extract the plain text covered by the current selection. */
+	private getSelectedText(): string {
+		const sel = this.normalizedSelection();
+		if (!sel || !this.hasSelection()) return "";
+		const lines = this.lastContentLines;
+		const out: string[] = [];
+		for (let line = sel.start.line; line <= sel.end.line; line++) {
+			const raw = lines[line] ?? "";
+			const lineWidth = visibleWidth(raw);
+			const c0 = line === sel.start.line ? sel.start.col : 0;
+			// End column is inclusive of the cell under the cursor when dragging.
+			const c1 = line === sel.end.line ? Math.min(sel.end.col + 1, lineWidth) : lineWidth;
+			if (c1 <= c0) {
+				out.push("");
+				continue;
+			}
+			out.push(stripAnsiToPlain(sliceByColumn(raw, c0, c1 - c0)).replace(/\s+$/, ""));
+		}
+		return out.join("\n");
+	}
+
+	/** Copy text to the system clipboard using OSC 52 (works locally and over SSH). */
+	private copyToClipboard(text: string): void {
+		const base64 = Buffer.from(text, "utf8").toString("base64");
+		this.terminal.write(`\x1b]52;c;${base64}\x07`);
+	}
+
+	/** Apply reverse-video highlight to the selected column range of a visible line. */
+	private applySelectionHighlight(window: string[], height: number): void {
+		const sel = this.normalizedSelection();
+		if (!sel || !this.hasSelection()) return;
+		for (let i = 0; i < height; i++) {
+			if (this.goBackButtonRow >= 0 && i === this.goBackButtonRow) continue;
+			const mapped = this.screenRowToContentLine(i);
+			if (!mapped) continue;
+			const contentLine = mapped.line;
+			if (contentLine < sel.start.line || contentLine > sel.end.line) continue;
+			const line = window[i];
+			const lineWidth = visibleWidth(line);
+			if (lineWidth === 0) continue;
+			const c0 = contentLine === sel.start.line ? sel.start.col : 0;
+			const c1 = contentLine === sel.end.line ? Math.min(sel.end.col + 1, lineWidth) : lineWidth;
+			const start = Math.max(0, Math.min(c0, lineWidth));
+			const end = Math.max(start, Math.min(c1, lineWidth));
+			if (end <= start) continue;
+			const before = sliceByColumn(line, 0, start);
+			const mid = sliceByColumn(line, start, end - start);
+			const after = sliceByColumn(line, end, lineWidth - end);
+			window[i] = `${before}\x1b[7m${mid}\x1b[27m${after}`;
 		}
 	}
 
@@ -732,7 +1059,12 @@ export class TUI extends Container {
 	}
 
 	/** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
-	private compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
+	private compositeOverlays(
+		lines: string[],
+		termWidth: number,
+		termHeight: number,
+		viewportStartOverride?: number,
+	): string[] {
 		if (this.overlayStack.length === 0) return lines;
 		const result = [...lines];
 
@@ -774,7 +1106,8 @@ export class TUI extends Container {
 			result.push("");
 		}
 
-		const viewportStart = Math.max(0, workingHeight - termHeight);
+		const viewportStart =
+			viewportStartOverride !== undefined ? viewportStartOverride : Math.max(0, workingHeight - termHeight);
 
 		// Composite each overlay
 		for (const { overlayLines, row, col, w } of rendered) {
@@ -790,6 +1123,9 @@ export class TUI extends Container {
 			}
 		}
 
+		if (viewportStartOverride !== undefined) {
+			return result.slice(viewportStart, viewportStart + termHeight);
+		}
 		return result;
 	}
 
@@ -885,7 +1221,256 @@ export class TUI extends Container {
 		return null;
 	}
 
+	/** Scroll the visible window by `deltaRows` (negative = up, positive = down). */
+	scrollBy(deltaRows: number): void {
+		if (this.legacyScrollback) return;
+		const height = this.terminal.rows;
+		const pinnedHeight = this.hasPinnedChildren() ? this.lastPinnedLineCount : 0;
+		const scrollArea = Math.max(1, height - pinnedHeight);
+		const maxOffset = Math.max(0, this.totalContentLines - scrollArea);
+		const next = Math.max(0, Math.min(this.scrollOffset + deltaRows, maxOffset));
+		if (next === this.scrollOffset && this.followBottom === next >= maxOffset) {
+			return;
+		}
+		this.scrollOffset = next;
+		// Re-enable auto-follow once the user scrolls back to the bottom.
+		this.followBottom = next >= maxOffset;
+		this.requestRender();
+	}
+
+	/** Jump the window to the bottom and resume auto-follow. */
+	scrollToBottom(): void {
+		if (this.legacyScrollback) return;
+		this.followBottom = true;
+		this.requestRender();
+	}
+
+	/** Whether the window is currently pinned to the bottom of the content. */
+	get isFollowingBottom(): boolean {
+		return this.followBottom;
+	}
+
+	private validateLineWidth(line: string, index: number, width: number, allLines: string[]): void {
+		if (isImageLine(line) || visibleWidth(line) <= width) {
+			return;
+		}
+		const crashLogPath = path.join(os.homedir(), ".pi", "agent", "pi-crash.log");
+		const crashData = [
+			`Crash at ${new Date().toISOString()}`,
+			`Terminal width: ${width}`,
+			`Line ${index} visible width: ${visibleWidth(line)}`,
+			"",
+			"=== All rendered lines ===",
+			...allLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
+			"",
+		].join("\n");
+		fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
+		fs.writeFileSync(crashLogPath, crashData);
+		this.stop();
+		throw new Error(
+			[
+				`Rendered line ${index} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
+				"",
+				"This is likely caused by a custom TUI component not truncating its output.",
+				"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
+				"",
+				`Debug log written to: ${crashLogPath}`,
+			].join("\n"),
+		);
+	}
+
+	/**
+	 * Position the hardware cursor using absolute addressing (alt-screen path).
+	 * `cursorPos.row` is relative to the visible window (0..height-1).
+	 */
+	private positionHardwareCursorAbsolute(cursorPos: { row: number; col: number } | null, height: number): void {
+		if (!cursorPos) {
+			this.terminal.hideCursor();
+			return;
+		}
+		const row = Math.max(0, Math.min(cursorPos.row, height - 1));
+		const col = Math.max(0, cursorPos.col);
+		this.terminal.write(`\x1b[${row + 1};${col + 1}H`);
+		if (this.showHardwareCursor) {
+			this.terminal.showCursor();
+		} else {
+			this.terminal.hideCursor();
+		}
+	}
+
 	private doRender(): void {
+		if (this.stopped) return;
+		if (this.legacyScrollback) {
+			this.doRenderScrollback();
+			return;
+		}
+
+		const width = this.terminal.columns;
+		const height = this.terminal.rows;
+		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
+		const heightChanged = this.previousHeight !== 0 && this.previousHeight !== height;
+
+		if (this.hasPinnedChildren()) {
+			this.doRenderPinned(width, height, widthChanged, heightChanged);
+			return;
+		}
+
+		// Render the full content, then composite overlays on top.
+		let full = this.render(width);
+		if (this.overlayStack.length > 0) {
+			full = this.compositeOverlays(full, width, height);
+			// Modal overlays (selectors/dialogs) should always be visible, so snap
+			// the window to the bottom where compositeOverlays anchors them.
+			this.followBottom = true;
+		}
+
+		this.totalContentLines = full.length;
+		this.lastContentLines = full;
+		const maxOffset = Math.max(0, full.length - height);
+		if (this.followBottom) {
+			this.scrollOffset = maxOffset;
+		} else {
+			this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, maxOffset));
+		}
+
+		// Build the visible window: exactly `height` rows starting at scrollOffset.
+		const window: string[] = new Array(height);
+		for (let i = 0; i < height; i++) {
+			const idx = this.scrollOffset + i;
+			window[i] = idx < full.length ? full[idx] : "";
+		}
+
+		// Cursor marker (if any) is found relative to the visible window.
+		const cursorPos = this.extractCursorPosition(window, height);
+		this.applySelectionHighlight(window, height);
+		const finalWindow = this.applyLineResets(window);
+
+		const forceFull = widthChanged || heightChanged || this.previousLines.length === 0;
+		let buffer = "\x1b[?2026h"; // Begin synchronized output
+
+		if (forceFull) {
+			this.fullRedrawCount += 1;
+			buffer += "\x1b[2J\x1b[H";
+			for (let i = 0; i < height; i++) {
+				this.validateLineWidth(finalWindow[i], i, width, finalWindow);
+				if (i > 0) buffer += "\r\n";
+				buffer += `\x1b[2K${finalWindow[i]}`;
+			}
+		} else {
+			for (let i = 0; i < height; i++) {
+				const previous = i < this.previousLines.length ? this.previousLines[i] : undefined;
+				if (previous === finalWindow[i]) continue;
+				this.validateLineWidth(finalWindow[i], i, width, finalWindow);
+				buffer += `\x1b[${i + 1};1H\x1b[2K${finalWindow[i]}`;
+			}
+		}
+
+		buffer += "\x1b[?2026l"; // End synchronized output
+		this.terminal.write(buffer);
+
+		this.previousLines = finalWindow;
+		this.previousWidth = width;
+		this.previousHeight = height;
+		this.maxLinesRendered = Math.max(this.maxLinesRendered, full.length);
+		this.cursorRow = Math.max(0, full.length - 1);
+
+		this.positionHardwareCursorAbsolute(cursorPos, height);
+	}
+
+	private doRenderPinned(width: number, height: number, widthChanged: boolean, heightChanged: boolean): void {
+		const scrollableLines = this.renderChildRange(width, 0, this.pinnedChildStart);
+		this.lastScrollableLineCount = scrollableLines.length;
+		this.totalContentLines = scrollableLines.length;
+
+		if (this.overlayStack.length > 0) {
+			// Modal overlays should always be visible; snap chat history to the bottom.
+			this.followBottom = true;
+		}
+
+		const showGoBackDown = this.showGoBackDown();
+		this.clearGoBackButtonHitBox();
+		this.goBackButtonRow = -1;
+
+		const pinnedParts: string[][] = [];
+		for (let i = this.pinnedChildStart; i < this.children.length; i++) {
+			pinnedParts.push(this.children[i].render(width));
+		}
+		const pinnedLines = pinnedParts.flat();
+		this.lastPinnedLineCount = pinnedLines.length;
+		this.scrollAreaHeight = Math.max(1, height - pinnedLines.length);
+		this.pinnedAreaStart = this.scrollAreaHeight;
+
+		let pinnedOffset = 0;
+		for (let i = 0; i < pinnedParts.length; i++) {
+			const child = this.children[this.pinnedChildStart + i];
+			if (showGoBackDown && child === this.goBackButtonAnchor) {
+				this.goBackButtonRow = this.pinnedAreaStart + pinnedOffset;
+			}
+			pinnedOffset += pinnedParts[i].length;
+		}
+
+		this.lastContentLines = [...scrollableLines, ...pinnedLines];
+		const maxOffset = Math.max(0, scrollableLines.length - this.scrollAreaHeight);
+		if (this.followBottom) {
+			this.scrollOffset = maxOffset;
+		} else {
+			this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, maxOffset));
+		}
+
+		const window: string[] = new Array(height);
+		for (let i = 0; i < this.scrollAreaHeight; i++) {
+			const idx = this.scrollOffset + i;
+			window[i] = idx < scrollableLines.length ? scrollableLines[idx] : "";
+		}
+		for (let i = 0; i < pinnedLines.length; i++) {
+			window[this.pinnedAreaStart + i] = pinnedLines[i];
+		}
+		for (let i = this.pinnedAreaStart + pinnedLines.length; i < height; i++) {
+			window[i] = "";
+		}
+
+		let finalWindow = window;
+		if (this.overlayStack.length > 0) {
+			finalWindow = this.compositeOverlays(window, width, height, 0);
+		}
+
+		const cursorPos = this.extractCursorPosition(finalWindow, height);
+		this.applySelectionHighlight(finalWindow, height);
+		finalWindow = this.applyLineResets(finalWindow);
+
+		const forceFull = widthChanged || heightChanged || this.previousLines.length === 0;
+		let buffer = "\x1b[?2026h";
+
+		if (forceFull) {
+			this.fullRedrawCount += 1;
+			buffer += "\x1b[2J\x1b[H";
+			for (let i = 0; i < height; i++) {
+				this.validateLineWidth(finalWindow[i], i, width, finalWindow);
+				if (i > 0) buffer += "\r\n";
+				buffer += `\x1b[2K${finalWindow[i]}`;
+			}
+		} else {
+			for (let i = 0; i < height; i++) {
+				const previous = i < this.previousLines.length ? this.previousLines[i] : undefined;
+				if (previous === finalWindow[i]) continue;
+				this.validateLineWidth(finalWindow[i], i, width, finalWindow);
+				buffer += `\x1b[${i + 1};1H\x1b[2K${finalWindow[i]}`;
+			}
+		}
+
+		buffer += "\x1b[?2026l";
+		this.terminal.write(buffer);
+
+		this.previousLines = finalWindow;
+		this.previousWidth = width;
+		this.previousHeight = height;
+		this.maxLinesRendered = Math.max(this.maxLinesRendered, scrollableLines.length + pinnedLines.length);
+		this.cursorRow = Math.max(0, scrollableLines.length + pinnedLines.length - 1);
+
+		this.positionHardwareCursorAbsolute(cursorPos, height);
+	}
+
+	private doRenderScrollback(): void {
 		if (this.stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;

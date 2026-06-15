@@ -369,9 +369,11 @@ export class ToolExecutionComponent extends Container {
 			} else {
 				try {
 					const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
-					this.callRendererComponent = component;
-					this.contentBox.addChild(component);
-					hasContent = true;
+					this.callRendererComponent = component ?? undefined;
+					if (component) {
+						this.contentBox.addChild(component);
+						hasContent = true;
+					}
 				} catch {
 					this.callRendererComponent = undefined;
 					this.contentBox.addChild(this.createCallFallback());
@@ -395,9 +397,11 @@ export class ToolExecutionComponent extends Container {
 							theme,
 							this.getRenderContext(this.resultRendererComponent),
 						);
-						this.resultRendererComponent = component;
-						this.contentBox.addChild(component);
-						hasContent = true;
+						this.resultRendererComponent = component ?? undefined;
+						if (component) {
+							this.contentBox.addChild(component);
+							hasContent = true;
+						}
 					} catch {
 						this.resultRendererComponent = undefined;
 						const component = this.createResultFallback();
@@ -450,6 +454,7 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		if (
+			this.toolName !== "delimiter" &&
 			(this.hasRendererDefinition() || (this.isSubagentTool() && this.subagentState)) &&
 			!hasContent &&
 			this.imageComponents.length === 0

@@ -4,6 +4,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { countDiffChanges, parseDiffItems } from "../../modes/interactive/components/diff.js";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import { assertFileMutationAllowed } from "./chunk-access.js";
 import {
@@ -17,7 +18,7 @@ import {
 } from "./edit-diff.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
-import { getToolStatusBullet, invalidArgText, shortenPath, str } from "./render-utils.js";
+import { getToolStatusBullet, indentToolBlock, invalidArgText, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 type EditRenderState = Record<string, never>;
@@ -311,9 +312,45 @@ export function createEditToolDefinition(
 			);
 		},
 		noBg: true,
+		streamingVisible: true,
 		renderCall(args, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatEditCall(args, theme, context.isPartial, context.isError));
+			const renderArgs = args as RenderableEditArgs | undefined;
+			const callText = formatEditCall(renderArgs, theme, context.isPartial, context.isError);
+
+			// Once the result is in, just show the header — renderResult handles the rendered diff.
+			if (!context.isPartial) {
+				const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+				text.setText(callText);
+				return text;
+			}
+
+			// While streaming: show oldText as "-" lines and newText as "+" lines, last N lines with ⎿ indent.
+			const edits = Array.isArray(renderArgs?.edits) ? (renderArgs.edits as Edit[]) : [];
+			const contentLines: string[] = [];
+			for (const edit of edits) {
+				if (edit.oldText) {
+					for (const line of edit.oldText.split("\n")) contentLines.push(`-${line}`);
+				}
+				if (edit.newText) {
+					for (const line of edit.newText.split("\n")) contentLines.push(`+${line}`);
+				}
+			}
+
+			const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+			if (contentLines.length === 0) {
+				text.setText(callText);
+				return text;
+			}
+
+			const totalLines = contentLines.length;
+			const maxLines = context.expanded ? totalLines : 10;
+			const hiddenLines = Math.max(0, totalLines - maxLines);
+			const displayLines = contentLines.slice(-maxLines);
+			let output = `${callText}\n${indentToolBlock(displayLines.join("\n"))}`;
+			if (hiddenLines > 0) {
+				output += `\n${theme.fg("muted", "  ")}${theme.fg("muted", `... (${hiddenLines} earlier lines hidden, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")})`;
+			}
+			text.setText(output);
 			return text;
 		},
 		renderResult(result, _options, theme, context) {

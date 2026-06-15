@@ -24,6 +24,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { getAgentDir } from "../config.js";
 import type { AuthStorage } from "./auth-storage.js";
+import { isCacheStale, readCache, refreshOpenRouterCache } from "./openrouter-model-cache.js";
 import {
 	clearConfigValueCache,
 	resolveConfigValueOrThrow,
@@ -349,7 +350,18 @@ export class ModelRegistry {
 		}
 
 		const builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
-		let combined = this.mergeCustomModels(builtInModels, customModels);
+
+		// Overlay cached OpenRouter models on top of the static built-ins.
+		// Non-openrouter providers are unaffected.
+		const cache = readCache();
+		const baseModels = cache
+			? this.mergeCustomModels(
+					builtInModels.filter((m) => m.provider !== "openrouter"),
+					cache.models,
+				)
+			: builtInModels;
+
+		let combined = this.mergeCustomModels(baseModels, customModels);
 
 		// Let OAuth providers modify their models (e.g., update baseUrl)
 		for (const oauthProvider of this.authStorage.getOAuthProviders()) {
@@ -360,6 +372,20 @@ export class ModelRegistry {
 		}
 
 		this.models = combined;
+	}
+
+	/**
+	 * Fire-and-forget background refresh of OpenRouter models.
+	 * Fetches the live catalogue, writes the cache, then reloads this.models.
+	 * Silently swallows all errors (refreshOpenRouterCache never throws).
+	 */
+	refreshOpenRouterModelsInBackground(apiKey?: string): void {
+		if (!apiKey) return;
+		const cache = readCache();
+		if (cache && !isCacheStale(cache)) return; // still fresh — nothing to do
+		void refreshOpenRouterCache(apiKey).then(() => {
+			this.loadModels();
+		});
 	}
 
 	/** Load built-in models and apply provider/model overrides */

@@ -1,9 +1,9 @@
 # Changelog
 
-## [r.11] - 2026-04-15
+## [r.12] - 2026-04-15
 
 ### Changed
-- Aligned the TUI-facing release marker with the r.11 coding-agent release so the terminal UI reports the current revision consistently.
+- Aligned the TUI-facing release marker with the r.12 coding-agent release so the terminal UI reports the current revision consistently.
 
 ## [r.9] - 2026-04-12
 

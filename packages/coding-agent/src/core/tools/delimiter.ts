@@ -15,6 +15,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { active, type ChunkDetails, type ChunkEvent, type ChunkInfo, entries, line } from "../chunk.js";
 import type { ToolDefinition } from "../extensions/types.js";
+import { renderBoundaryLine } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const delimiterSchema = Type.Object({
@@ -66,21 +67,8 @@ function chunkTypeColor(type: ChunkInfo["type"]): "accent" | "warning" {
 	return type === "expl" ? "accent" : "warning";
 }
 
-function boundaryLine(label: string, styledLabel: string, width: number, theme: Theme): string {
-	const safeWidth = Math.max(1, width);
-	if (safeWidth <= label.length + 2) {
-		return styledLabel;
-	}
-	const remaining = safeWidth - label.length - 2;
-	const left = Math.max(1, Math.floor(remaining / 2));
-	const right = Math.max(1, remaining - left);
-	const line = theme.fg("muted", "─");
-	return `${line.repeat(left)} ${styledLabel} ${line.repeat(right)}`;
-}
-
 class DelimiterBoundary implements Component {
 	constructor(
-		private label: string,
 		private styledLabel: string,
 		private details: string[],
 		private theme: Theme,
@@ -91,7 +79,7 @@ class DelimiterBoundary implements Component {
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
 		return [
-			boundaryLine(this.label, this.styledLabel, width, this.theme),
+			renderBoundaryLine(this.styledLabel, width, this.theme),
 			...this.details.map((detail) => truncateToWidth(`${this.theme.fg("muted", "  · ")}${detail}`, safeWidth)),
 		];
 	}
@@ -124,7 +112,7 @@ export function createDelimiterToolDefinition(
 			const input = args as DelimiterToolInput;
 			if (input.action === "end") {
 				// renderResult shows the finalized boundary with chunk metadata once the tool completes.
-				return new Text("", 0, 0);
+				return null;
 			}
 
 			const chunkType = input.type ?? "expl";
@@ -137,7 +125,6 @@ export function createDelimiterToolDefinition(
 			}
 
 			return new DelimiterBoundary(
-				`begin ${typeLabel}: ${chunkName}`,
 				`${t.fg("muted", "Begin")} ${t.fg(typeColor, typeLabel)}${t.fg("muted", ":")} ${t.fg("toolTitle", t.bold(chunkName))}`,
 				details,
 				t,
@@ -165,7 +152,6 @@ export function createDelimiterToolDefinition(
 
 			if (event.action === "end") {
 				return new DelimiterBoundary(
-					`end ${typeLabel}: ${event.chunk.name}`,
 					`${t.fg("muted", "End")} ${t.fg(typeColor, typeLabel)}${t.fg("muted", ":")} ${t.fg("toolTitle", t.bold(event.chunk.name))}`,
 					detailLines,
 					t,
@@ -173,7 +159,7 @@ export function createDelimiterToolDefinition(
 			}
 
 			// renderCall already shows the begin boundary; suppress duplicate here
-			return new Text("", 0, 0);
+			return null;
 		},
 
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {

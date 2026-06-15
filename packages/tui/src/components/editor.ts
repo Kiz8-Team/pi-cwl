@@ -4,7 +4,14 @@ import { decodeKittyPrintable, matchesKey } from "../keys.js";
 import { KillRing } from "../kill-ring.js";
 import { type Component, CURSOR_MARKER, type Focusable, type TUI } from "../tui.js";
 import { UndoStack } from "../undo-stack.js";
-import { getSegmenter, isPunctuationChar, isWhitespaceChar, truncateToWidth, visibleWidth } from "../utils.js";
+import {
+	getSegmenter,
+	isPunctuationChar,
+	isWhitespaceChar,
+	renderBorderWithCenterButton,
+	truncateToWidth,
+	visibleWidth,
+} from "../utils.js";
 import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list.js";
 
 const baseSegmenter = getSegmenter();
@@ -200,6 +207,11 @@ interface LayoutLine {
 export interface EditorTheme {
 	borderColor: (str: string) => string;
 	selectList: SelectListTheme;
+	/** Optional styling for the chat-history "Go back down" button in the top border. */
+	goBackButton?: {
+		background: (str: string) => string;
+		text: (str: string) => string;
+	};
 }
 
 export interface EditorOptions {
@@ -459,7 +471,19 @@ export class Editor implements Component, Focusable {
 		const rightPadding = leftPadding;
 
 		// Render top border (with scroll indicator if scrolled down)
-		if (this.scrollOffset > 0) {
+		if (this.tui.showGoBackDown()) {
+			const buttonStyles = this.theme.goBackButton ?? {
+				background: (text: string) => `\x1b[48;5;236m${text}\x1b[49m`,
+				text: (text: string) => text,
+			};
+			const layout = renderBorderWithCenterButton(width, "↓ Go back down", {
+				line: this.borderColor,
+				background: buttonStyles.background,
+				text: buttonStyles.text,
+			});
+			this.tui.setGoBackButtonHitBox(layout.colStart, layout.colEnd);
+			result.push(layout.line);
+		} else if (this.scrollOffset > 0) {
 			const indicator = `─── ↑ ${this.scrollOffset} more `;
 			const remaining = width - visibleWidth(indicator);
 			if (remaining >= 0) {

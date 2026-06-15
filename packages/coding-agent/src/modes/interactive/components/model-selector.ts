@@ -140,6 +140,12 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		// Refresh to pick up any changes to models.json
 		this.modelRegistry.refresh();
 
+		// Fire a background OpenRouter model refresh if the cache is stale.
+		// The resolved API key is checked async; the call is fire-and-forget.
+		this.modelRegistry.getApiKeyForProvider("openrouter").then((apiKey) => {
+			this.modelRegistry.refreshOpenRouterModelsInBackground(apiKey);
+		});
+
 		// Check for models.json errors
 		const loadError = this.modelRegistry.getError();
 		if (loadError) {

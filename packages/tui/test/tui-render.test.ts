@@ -1,7 +1,9 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
-import { type Component, TUI } from "../src/tui.js";
+import { Editor } from "../src/components/editor.js";
+import { type Component, Container, TUI } from "../src/tui.js";
+import { defaultEditorTheme } from "./test-themes.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
 class TestComponent implements Component {
@@ -503,6 +505,245 @@ describe("TUI differential rendering", () => {
 			"Editor 1",
 			"Editor 2",
 		]);
+
+		tui.stop();
+	});
+});
+
+describe("TUI alternate-screen scrolling", () => {
+	// The throttled render path uses setTimeout, so give scheduled renders time to flush.
+	const settle = async (terminal: VirtualTerminal): Promise<void> => {
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		await terminal.flush();
+	};
+
+	it("preserves the scroll position when content is appended while scrolled up", async () => {
+		const terminal = new VirtualTerminal(20, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 12 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await settle(terminal);
+		assert.ok(tui.isFollowingBottom, "Should start pinned to the bottom");
+
+		// Scroll up - this should disable auto-follow.
+		tui.scrollBy(-3);
+		await settle(terminal);
+		assert.ok(!tui.isFollowingBottom, "Scrolling up should disable auto-follow");
+		const viewportAfterScroll = terminal.getViewport();
+		assert.ok(viewportAfterScroll[0]?.includes("Line 4"), `Expected scrolled view, got: ${viewportAfterScroll[0]}`);
+
+		// New content arrives - the viewport must NOT jump to the bottom.
+		component.lines = Array.from({ length: 16 }, (_, i) => `Line ${i}`);
+		tui.requestRender();
+		await settle(terminal);
+
+		assert.ok(!tui.isFollowingBottom, "Append while scrolled up must not re-enable follow");
+		const viewportAfterAppend = terminal.getViewport();
+		assert.ok(
+			viewportAfterAppend[0]?.includes("Line 4"),
+			`Scroll position should be preserved, got: ${viewportAfterAppend[0]}`,
+		);
+
+		tui.stop();
+	});
+
+	it("scrolls via Shift+PageUp without forwarding the key to the focused component", async () => {
+		const terminal = new VirtualTerminal(20, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 12 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await settle(terminal);
+
+		// Legacy Shift+PageUp sequence.
+		terminal.sendInput("\x1b[5$");
+		await settle(terminal);
+
+		assert.ok(!tui.isFollowingBottom, "Shift+PageUp should scroll up and disable auto-follow");
+
+		tui.stop();
+	});
+
+	it("copies selected text to the clipboard on drag release", async () => {
+		const terminal = new LoggingVirtualTerminal(20, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = ["hello world", "second line"];
+		tui.start();
+		await settle(terminal);
+		terminal.clearWrites();
+
+		// Press left button at row 1, col 1, drag to col 5, release.
+		terminal.sendInput("\x1b[<0;1;1M"); // press at (1,1)
+		await settle(terminal);
+		terminal.sendInput("\x1b[<32;5;1M"); // drag (motion) to (5,1)
+		await settle(terminal);
+		terminal.sendInput("\x1b[<0;5;1m"); // release at (5,1)
+		await settle(terminal);
+
+		const writes = terminal.getWrites();
+		const osc = writes.match(/\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/);
+		assert.ok(osc, "Expected an OSC 52 clipboard write");
+		const copied = Buffer.from(osc[1], "base64").toString("utf8");
+		assert.strictEqual(copied, "hello", `Expected "hello", got: ${JSON.stringify(copied)}`);
+
+		tui.stop();
+	});
+
+	it("does not forward mouse events to handleInput", async () => {
+		const terminal = new VirtualTerminal(20, 5);
+		const tui = new TUI(terminal);
+		let received = "";
+		const component: Component = {
+			render: () => ["x"],
+			invalidate() {},
+			handleInput(d: string) {
+				received += d;
+			},
+		};
+		tui.addChild(component);
+		tui.setFocus(component);
+		tui.start();
+		await settle(terminal);
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<64;1;1M");
+		await settle(terminal);
+
+		assert.strictEqual(received, "", "Mouse events must not reach handleInput");
+
+		tui.stop();
+	});
+
+	it("forwards mouse events to handleMouseInput on the focused component", async () => {
+		const terminal = new VirtualTerminal(20, 5);
+		const tui = new TUI(terminal);
+		let mouseEvents = 0;
+		const component: Component = {
+			render: () => ["x"],
+			invalidate() {},
+			handleMouseInput() {
+				mouseEvents += 1;
+				return true;
+			},
+		};
+		tui.addChild(component);
+		tui.setFocus(component);
+		tui.start();
+		await settle(terminal);
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<64;1;1M");
+		await settle(terminal);
+
+		assert.strictEqual(mouseEvents, 2, "Mouse events should reach handleMouseInput");
+
+		tui.stop();
+	});
+
+	it("re-enables auto-follow once the user scrolls back to the bottom", async () => {
+		const terminal = new VirtualTerminal(20, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = Array.from({ length: 12 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await settle(terminal);
+
+		tui.scrollBy(-3);
+		await settle(terminal);
+		assert.ok(!tui.isFollowingBottom);
+
+		// Scroll back down past the bottom.
+		tui.scrollBy(10);
+		await settle(terminal);
+
+		assert.ok(tui.isFollowingBottom, "Reaching the bottom should re-enable auto-follow");
+		const viewport = terminal.getViewport();
+		assert.ok(viewport[viewport.length - 1]?.includes("Line 11"), `Bottom should be visible, got: ${viewport}`);
+
+		tui.stop();
+	});
+});
+
+describe("TUI pinned bottom children", () => {
+	const settle = async (terminal: VirtualTerminal): Promise<void> => {
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		await terminal.flush();
+	};
+
+	it("keeps pinned children visible while scrolling chat history", async () => {
+		const terminal = new VirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const chat = new TestComponent();
+		const editor = new TestComponent();
+		tui.addChild(chat);
+		tui.addChild(editor);
+		tui.setPinnedChildStart(1);
+
+		chat.lines = Array.from({ length: 12 }, (_, i) => `Chat ${i}`);
+		editor.lines = ["Editor 0", "Editor 1", "Editor 2"];
+		tui.start();
+		await settle(terminal);
+
+		tui.scrollBy(-3);
+		await settle(terminal);
+
+		const viewport = terminal.getViewport();
+		assert.ok(viewport[0]?.includes("Chat 4"), `Expected scrolled chat at top, got: ${viewport[0]}`);
+		assert.ok(viewport[viewport.length - 1]?.includes("Editor 2"), `Editor should stay pinned, got: ${viewport}`);
+		assert.ok(!tui.isFollowingBottom);
+
+		tui.stop();
+	});
+
+	it("shows a Go back down button when scrolled up and scrolls to latest output on click", async () => {
+		const terminal = new VirtualTerminal(40, 8);
+		const tui = new TUI(terminal);
+		const chat = new TestComponent();
+		const editorContainer = new Container();
+		const editor = new Editor(tui, defaultEditorTheme);
+		editorContainer.addChild(editor);
+		tui.addChild(chat);
+		tui.addChild(editorContainer);
+		tui.setPinnedChildStart(1);
+		tui.setGoBackButtonAnchor(editorContainer);
+
+		chat.lines = Array.from({ length: 12 }, (_, i) => `Chat ${i}`);
+		tui.start();
+		await settle(terminal);
+
+		tui.scrollBy(-4);
+		await settle(terminal);
+
+		const viewportBefore = terminal.getViewport();
+		const buttonRow = viewportBefore.findIndex((line) => line.includes("Go back down"));
+		assert.ok(buttonRow >= 0, `Expected Go back down button, got: ${viewportBefore.join(" | ")}`);
+
+		// Click the center of the button (1-based terminal coordinates).
+		terminal.sendInput(`\x1b[<0;20;${buttonRow + 1}M`);
+		await settle(terminal);
+		terminal.sendInput(`\x1b[<0;20;${buttonRow + 1}m`);
+		await settle(terminal);
+
+		assert.ok(tui.isFollowingBottom, "Button click should follow latest output");
+		const viewportAfter = terminal.getViewport();
+		assert.ok(
+			viewportAfter.some((line) => line.includes("Chat 11")),
+			`Latest chat line should be visible, got: ${viewportAfter.join(" | ")}`,
+		);
+		assert.ok(
+			!viewportAfter.some((line) => line.includes("Go back down")),
+			"Button should hide when following bottom",
+		);
 
 		tui.stop();
 	});

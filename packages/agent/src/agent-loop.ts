@@ -191,10 +191,31 @@ async function runLoop(
 			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFn);
 			newMessages.push(message);
 
-			if (message.stopReason === "error" || message.stopReason === "aborted") {
+			if (message.stopReason === "aborted") {
 				await emit({ type: "turn_end", message, toolResults: [] });
 				await emit({ type: "agent_end", messages: newMessages });
 				return;
+			}
+
+			if (message.stopReason === "error") {
+				const errorText = message.errorMessage ?? "An unknown error occurred.";
+				// If the failed message contains tool calls, respond to each with an error
+				// tool result so the conversation stays valid (tool calls must have results).
+				const partialToolCalls = message.content.filter((c) => c.type === "toolCall");
+				const toolResults: ToolResultMessage[] = [];
+				if (partialToolCalls.length > 0) {
+					for (const toolCall of partialToolCalls) {
+						const result = createErrorToolResult(errorText);
+						toolResults.push(await emitToolCallOutcome(toolCall, result, true, emit));
+					}
+					for (const result of toolResults) {
+						currentContext.messages.push(result);
+						newMessages.push(result);
+					}
+				}
+				await emit({ type: "turn_end", message, toolResults });
+				hasMoreToolCalls = partialToolCalls.length > 0; // continue only if we had tool calls to respond to
+				continue;
 			}
 
 			// Check for tool calls

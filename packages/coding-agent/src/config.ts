@@ -187,7 +187,7 @@ const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8"));
 export const APP_NAME: string = pkg.piConfig?.name || "pi";
 export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".claude";
 export const VERSION: string = pkg.version;
-export const TUI_VERSION = "r.11";
+export const TUI_VERSION = "r.12";
 export const TERMINAL_TITLE = `Pi with CWL - ${TUI_VERSION}`;
 
 // e.g., PI_CODING_AGENT_DIR or TAU_CODING_AGENT_DIR
@@ -230,6 +230,11 @@ export function getCustomThemesDir(): string {
 /** Get path to models.json */
 export function getModelsPath(): string {
 	return join(getAgentDir(), "models.json");
+}
+
+/** Get path to OpenRouter runtime model cache */
+export function getOpenRouterCachePath(): string {
+	return join(getAgentDir(), "openrouter-models-cache.json");
 }
 
 /** Get path to auth.json */

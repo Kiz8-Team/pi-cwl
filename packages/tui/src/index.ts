@@ -101,4 +101,11 @@ export {
 	TUI,
 } from "./tui.js";
 // Utilities
-export { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.js";
+export {
+	type BorderButtonLayout,
+	type BorderButtonStyles,
+	renderBorderWithCenterButton,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "./utils.js";

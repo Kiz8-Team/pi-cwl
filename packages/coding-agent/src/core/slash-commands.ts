@@ -29,7 +29,6 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "login", description: "Login with OAuth provider" },
 	{ name: "logout", description: "Logout from OAuth provider" },
 	{ name: "clear", description: "Start a new session" },
-	{ name: "compact", description: "Manually compact the session context" },
 	{ name: "resume", description: "Resume a different session" },
 	{ name: "agents", description: "Switch to a subagent conversation" },
 	{ name: "reload", description: "Reload keybindings, extensions, skills, commands, and themes" },
