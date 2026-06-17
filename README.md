@@ -4,11 +4,9 @@
 
 It is a fork of the open-source [pi.dev](https://pi.dev/) terminal coding agent, extended with the CWL protocol described in our paper:
 
-> **Beyond Compaction: Structured Context Eviction for Long-Horizon Agents**  
+> [**Beyond Compaction: Structured Context Eviction for Long-Horizon Agents**](https://arxiv.org/abs/2606.11213)  
 > Andrew Semenov, Svyatoslav Dorofeev — Kiz8  
-> _Preprint manuscript, 2026_
-
-We opened this repository before the arXiv paper went public. The arXiv submission has been stalled since April 21 2026, and we decided not to wait any longer to share the paper and reference implementation.
+> _arXiv:2606.11213 [cs.CL], 2026_
 
 ---
 
@@ -101,4 +99,18 @@ packages/
 
 ## Citation
 
-Pending
+If you use CWL or this reference implementation in your work, please cite:
+
+```bibtex
+@misc{semenov2026compactionstructuredcontexteviction,
+  title         = {Beyond Compaction: Structured Context Eviction for Long-Horizon Agents},
+  author        = {Andrew Semenov and Svyatoslav Dorofeev},
+  year          = {2026},
+  eprint        = {2606.11213},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  url           = {https://arxiv.org/abs/2606.11213},
+}
+```
+
+A standalone BibTeX file is available at [`CITATION.bib`](CITATION.bib).

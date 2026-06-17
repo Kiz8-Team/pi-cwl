@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+title: "pi-cwl: Reference implementation of Context Window Lifecycle (CWL)"
+message: "If you use this software, please cite the CWL paper."
+authors:
+  - family-names: Semenov
+    given-names: Andrew
+    affiliation: Kiz8
+  - family-names: Dorofeev
+    given-names: Svyatoslav
+    affiliation: Kiz8
+repository-code: "https://github.com/Kiz8-Team/pi-cwl"
+license: MIT
+preferred-citation:
+  type: article
+  title: "Beyond Compaction: Structured Context Eviction for Long-Horizon Agents"
+  authors:
+    - family-names: Semenov
+      given-names: Andrew
+      affiliation: Kiz8
+    - family-names: Dorofeev
+      given-names: Svyatoslav
+      affiliation: Kiz8
+  year: 2026
+  url: "https://arxiv.org/abs/2606.11213"
+  doi: 10.48550/arXiv.2606.11213
